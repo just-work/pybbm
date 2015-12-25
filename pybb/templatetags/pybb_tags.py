@@ -9,6 +9,7 @@ import pytz
 import datetime
 
 from django import template
+from django.conf import settings
 from django.core.cache import cache
 from django.template.base import get_library, InvalidTemplateLibrary, TemplateSyntaxError, TOKEN_BLOCK
 from django.template.defaulttags import LoadNode, CommentNode, IfNode
@@ -18,7 +19,7 @@ from django.utils.encoding import smart_text
 from django.utils.html import escape
 from django.utils.translation import ugettext as _
 from django.utils import dateformat
-from django.utils.timezone import timedelta
+from django.utils.timezone import timedelta, get_default_timezone, make_aware
 from django.utils.timezone import now as tznow
 from django.db.models import Sum
 
@@ -213,30 +214,53 @@ def post_count_with_child(forum):
         return 0
 
 
+def forum_unread(forum, user, marks_cache):
+    if settings.USE_TZ:
+        default_date = pytz.utc.localize(datetime.datetime.min)
+    else:
+        default_date = datetime.datetime.min
+    ts = marks_cache.get(forum.id, default_date)
+
+    if forum.updated and (forum.updated > ts):
+        topics = perms.filter_topics(user, forum.topics.all())
+        qs = TopicReadTracker.objects.filter(
+            user=user, topic__in=topics).values_list('topic', 'time_stamp')
+        topic_read = dict(qs)
+        for topic in topics:
+            if ((topic.updated or topic.created) >
+                topic_read.get(topic.id, default_date)):
+                return True
+
+    forums = perms.filter_forums(user, forum.child_forums.all())
+    marks_cache.update(ForumReadTracker.objects.filter(
+            user=user,
+            forum__in=forums
+        ).values_list('forum', 'time_stamp'))
+
+    for fr in forums:
+        if forum_unread(fr, user, marks_cache):
+            return True
+
+    return False
+
+
+
 @register.filter
 def pybb_forum_unread(forums, user):
     """
     Check if forum has unread messages.
     """
     forum_list = list(forums)
+
     if user.is_authenticated():
-        for forum in forum_list:
-            forum.unread = topic_count_with_child(forum) > 0
-        forum_marks = ForumReadTracker.objects.filter(
+        marks_cache = dict()
+        marks_cache.update(ForumReadTracker.objects.filter(
             user=user,
             forum__in=forum_list
-        ).select_related('forum')
+        ).values_list('forum', 'time_stamp'))
 
-        marks_dict = dict(((mark.forum.id, mark) for mark in forum_marks))
         for forum in forum_list:
-            is_children_read = not any(
-                f.unread for f in pybb_forum_unread(
-                    forum.child_forums.all(), user))
-            default_date = pytz.utc.localize(datetime.datetime.min)
-            updated = forum.updated or default_date
-            read = getattr(marks_dict.get(forum.id), 'time_stamp', default_date)
-            if updated <= read and is_children_read:
-                forum.unread = False
+            forum.unread = forum_unread(forum, user, marks_cache)
     return forum_list
 
 

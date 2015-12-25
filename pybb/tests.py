@@ -569,6 +569,70 @@ class FeaturesTest(TestCase, SharedTestModule):
         response = client_ann.get(topic_1.get_absolute_url(), data={'first-unread': 1}, follow=True)
         self.assertRedirects(response, '%s?page=%d#post-%d' % (topic_1.get_absolute_url(), 1, post_1_3.id))
 
+    def test_read_with_permissions(self):
+        user_data = {
+        'ann': (('ann', 'anupdatedn@localhost', 'ann'), {}),
+        'joe': (('joe', 'joe@localhost', 'joe'), {}),
+        'moderator': (('zoy', 'zoy@localhost', 'zoy'), {'is_staff': True}),
+        'steve': (('steve', 'steve@localhost', 'steve'), {'is_staff': True}),
+        'clark': (('clark', 'clark@localhost', 'clark'),
+                  {'is_staff': True, 'is_superuser': True})
+        }
+        users = {}
+        for name, (args, kwargs) in user_data.iteritems():
+            users[name] = User.objects.create_user(*args, **kwargs)
+            for k, v in kwargs.items():
+                setattr(users[name], k, v)
+            users[name].save()
+
+        forum = Forum.objects.create(
+            name='f1',
+            description='foo',
+            category=self.category,
+        )
+        forum.moderators.add(users['moderator'])
+        forum.save()
+        subforum = Forum.objects.create(
+            name='f2', description='bar', category=self.category,
+            parent=forum, hidden=True
+        )
+
+        def check_unread():
+            result = {}
+            for name, (args, kwargs) in user_data.iteritems():
+                self.login_client(*args[:2])
+                pybb_forum_unread([forum], users[name])
+                result[name] = forum.unread
+                self.client.get(reverse('pybb:mark_all_as_read'))
+                self.client.logout()
+            return result
+
+        #create hidden topic
+        topic = Topic.objects.create(
+            name='topic_from_hidden_forum',
+            forum=subforum,
+            user=users['joe'],
+        )
+        result = check_unread()
+        self.assertEqual(result, {
+            'ann': False,
+            'joe': False,
+            'moderator': True,
+            'steve': True,
+            'clark': True
+            })
+
+        #post in topic from hidden subforum
+        Post.objects.create(topic=topic, user=users['moderator'], body='one')
+        result = check_unread()
+        self.assertEqual(result, {
+            'ann': False,
+            'joe': False,
+            'moderator': True,
+            'steve': True,
+            'clark': True
+            })
+
     def test_latest_topics(self):
         topic_1 = self.topic
         topic_1.updated = timezone.now()
@@ -1003,6 +1067,7 @@ class FeaturesTest(TestCase, SharedTestModule):
     def tearDown(self):
         defaults.PYBB_ENABLE_ANONYMOUS_POST = self.ORIG_PYBB_ENABLE_ANONYMOUS_POST
         defaults.PYBB_PREMODERATION = self.ORIG_PYBB_PREMODERATION
+        self.client.logout()
 
 
 class AnonymousTest(TestCase, SharedTestModule):
