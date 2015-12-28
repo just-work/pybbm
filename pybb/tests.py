@@ -1854,3 +1854,37 @@ class LogonRedirectTest(TestCase, SharedTestModule):
         self.assertIsNotNone(profile)
         self.assertEqual(type(profile), util.get_pybb_profile_model())
         user.delete()
+
+
+class TopicTestCase(TestCase, SharedTestModule):
+    def setUp(self):
+        self.create_user()
+
+    def test_last_post_no_posts_returns_None(self):
+        """Тестирует, что когда постов нет, last_post возвращает None"""
+        self.create_initial(post=False)
+        self.assertIsNone(self.topic.last_post)
+
+    def test_last_post_with_posts_returns_post(self):
+        """Тестирует, что когда посты есть, last_post возвращает последний"""
+        self.create_initial()
+        post = Post.objects.create(
+            topic=self.topic, user=self.user, body='bbcode [b]test[/b]')
+        self.assertIsInstance(self.topic.last_post, Post)
+        self.assertEquals(post.id, self.topic.last_post.id)
+
+    def test_update_counters_ok(self):
+        """Тестирует, что обновление счетчиков отрабатывает как надо"""
+        self.create_initial()
+        post_count = self.topic.post_count
+        Post.objects.create(
+            topic=self.topic, user=self.user, body='bbcode [b]test[/b]')
+        topic = Topic.objects.get(pk=self.topic.id)
+        self.assertGreater(topic.post_count, post_count)
+
+    def test_update_counters_with_no_posts(self):
+        """Тестирует, что обновление счетчиков не падает с IndexError
+        http://redmine.just-work.org/issues/2298
+        """
+        self.create_initial(post=False)
+        self.topic.update_counters()
